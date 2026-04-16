@@ -153,18 +153,14 @@ def _simulate_acceleration_measurements(
     return accel
 
 
-def _select_strongest_valid_rss_indices(
+def _select_valid_rss_indices(
     rss_values: np.ndarray,
-    max_beacons: int | None,
+    min_rss_threshold: float | None,
 ) -> np.ndarray:
-    valid_indices = np.where(np.isfinite(rss_values))[0]
-    if len(valid_indices) == 0:
-        return valid_indices
-
-    strongest = valid_indices[np.argsort(rss_values[valid_indices])[::-1]]
-    if max_beacons is None or max_beacons <= 0:
-        return strongest
-    return strongest[: min(max_beacons, len(strongest))]
+    valid_mask = np.isfinite(rss_values)
+    if min_rss_threshold is not None:
+        valid_mask &= rss_values >= min_rss_threshold
+    return np.where(valid_mask)[0]
 
 
 # ── Extended Kalman Filter (matches pos2D_EKF_RSS.m) ──
@@ -178,6 +174,7 @@ def _ekf_update(
     z: np.ndarray,
     Q: np.ndarray,
     R: np.ndarray,
+    max_normalized_innovation: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     x1, A = _jacobian_complex_step(f_state, x)
     P = A @ P @ A.T + Q
@@ -200,7 +197,12 @@ def _ekf_update(
 
     U = np.linalg.solve(L, P12.T).T
     innovation = z - z1
-    x = x1 + U @ np.linalg.solve(L, innovation)
+    whitened_innovation = np.linalg.solve(L, innovation)
+    if max_normalized_innovation is not None:
+        nis = float(whitened_innovation.T @ whitened_innovation)
+        if nis > max_normalized_innovation:
+            return x1.real, P.real
+    x = x1 + U @ whitened_innovation
     P = P - U @ U.T
     # Ensure P stays positive-definite
     P = 0.5 * (P + P.T)
@@ -220,7 +222,7 @@ def estimate_ekf_rss(
     is_cancelled: Callable[[], bool] | None = None,
     rssi_at_ref: float = -59.0,
     d0: float = 1.0,
-    max_beacons: int | None = None,
+    min_rss_threshold: float | None = None,
 ) -> list[TrajectoryPoint]:
     n_states = 5
 
@@ -266,7 +268,7 @@ def estimate_ekf_rss(
             )
 
         meas = signal.measurements[i]
-        selected = _select_strongest_valid_rss_indices(meas.values, max_beacons)
+        selected = _select_valid_rss_indices(meas.values, min_rss_threshold)
         if len(selected) == 0:
             x, A = _jacobian_complex_step(f_state, x)
             P = A @ P @ A.T + Q
@@ -290,7 +292,16 @@ def estimate_ekf_rss(
                 )
             )
             R = measurement_noise_std**2 * np.eye(len(selected))
-            x, P = _ekf_update(f_state, x, P, h_meas, z, Q, R)
+            x, P = _ekf_update(
+                f_state,
+                x,
+                P,
+                h_meas,
+                z,
+                Q,
+                R,
+                max_normalized_innovation=9.0 * len(selected),
+            )
         result.append(
             TrajectoryPoint(
                 x=float(x[0].real),
@@ -397,7 +408,7 @@ def estimate_ekf_rss_accel(
     is_cancelled: Callable[[], bool] | None = None,
     rssi_at_ref: float = -59.0,
     d0: float = 1.0,
-    max_beacons: int | None = None,
+    min_rss_threshold: float | None = None,
 ) -> list[TrajectoryPoint]:
     n_states = 7
 
@@ -475,7 +486,7 @@ def estimate_ekf_rss_accel(
             )
 
         meas = signal.measurements[i]
-        selected = _select_strongest_valid_rss_indices(meas.values, max_beacons)
+        selected = _select_valid_rss_indices(meas.values, min_rss_threshold)
         bp = beacon_positions[selected]
         if use_walls:
             w_att = _compute_wall_attenuation(
@@ -506,7 +517,16 @@ def estimate_ekf_rss_accel(
                 )
             )
         )
-        x, P = _ekf_update(f_state, x, P, h_meas, z, Q, R)
+        x, P = _ekf_update(
+            f_state,
+            x,
+            P,
+            h_meas,
+            z,
+            Q,
+            R,
+            max_normalized_innovation=9.0 * len(z),
+        )
         result.append(
             TrajectoryPoint(
                 x=float(x[0]),
@@ -563,6 +583,7 @@ def _ukf_update(
     z: np.ndarray,
     Q: np.ndarray,
     R: np.ndarray,
+    max_normalized_innovation: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     L = len(x)
     m = len(z)
@@ -600,6 +621,15 @@ def _ukf_update(
     except np.linalg.LinAlgError:
         return x1, P1
 
+    if max_normalized_innovation is not None:
+        innovation = z - z1
+        try:
+            nis = float(innovation.T @ np.linalg.solve(P2, innovation))
+        except np.linalg.LinAlgError:
+            return x1, P1
+        if nis > max_normalized_innovation:
+            return x1, P1
+
     x = x1 + K @ (z - z1)
     P = P1 - K @ P12.T
     P = 0.5 * (P + P.T)
@@ -619,7 +649,7 @@ def estimate_ukf_rss(
     is_cancelled: Callable[[], bool] | None = None,
     rssi_at_ref: float = -59.0,
     d0: float = 1.0,
-    max_beacons: int | None = None,
+    min_rss_threshold: float | None = None,
 ) -> list[TrajectoryPoint]:
     n_states = 5
 
@@ -664,7 +694,7 @@ def estimate_ukf_rss(
             )
 
         meas = signal.measurements[i]
-        selected = _select_strongest_valid_rss_indices(meas.values, max_beacons)
+        selected = _select_valid_rss_indices(meas.values, min_rss_threshold)
         if len(selected) == 0:
             x = f_state(x)
             P = P + Q
@@ -687,7 +717,16 @@ def estimate_ukf_rss(
                 )
             )
             R = measurement_noise_std**2 * np.eye(len(selected))
-            x, P = _ukf_update(f_state, x, P, h_meas, z, Q, R)
+            x, P = _ukf_update(
+                f_state,
+                x,
+                P,
+                h_meas,
+                z,
+                Q,
+                R,
+                max_normalized_innovation=9.0 * len(selected),
+            )
         result.append(
             TrajectoryPoint(
                 x=float(x[0]),
@@ -805,7 +844,7 @@ def estimate_trilateration_rss(
     is_cancelled: Callable[[], bool] | None = None,
     rssi_at_ref: float = -59.0,
     d0: float = 1.0,
-    max_beacons: int = 3,
+    min_rss_threshold: float | None = None,
 ) -> list[TrajectoryPoint]:
     all_beacon_positions = np.array([b.r for b in signal.beacons]).T
 
@@ -840,13 +879,12 @@ def estimate_trilateration_rss(
         )
 
         valid_mask = np.isfinite(distances) & (distances > 0) & np.isfinite(rss_values)
+        if min_rss_threshold is not None:
+            valid_mask &= rss_values >= min_rss_threshold
         valid_indices = np.where(valid_mask)[0]
 
-        selected = _select_strongest_valid_rss_indices(
-            rss_values[valid_indices], max_beacons
-        )
-        if len(selected) >= 3:
-            selected = valid_indices[selected]
+        if len(valid_indices) >= 3:
+            selected = valid_indices[np.argsort(rss_values[valid_indices])[::-1][:3]]
 
             try:
                 x = _trilaterate(
