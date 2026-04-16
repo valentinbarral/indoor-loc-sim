@@ -323,14 +323,13 @@ class FloorPlanCanvas(QGraphicsView):
         self._selection_start = None
 
     def _select_item_at(self, scene_pos: QPointF) -> bool:
+        for item in self._scene.items(scene_pos):
+            if isinstance(item, BeaconGraphicsItem):
+                return False
+
         self.clear_selection()
 
         for item in self._scene.items(scene_pos):
-            if isinstance(item, BeaconGraphicsItem):
-                self._selected_beacon_items.append(item)
-                item.setBrush(QBrush(BEACON_SELECTED_COLOR))
-                return True
-
             if item in self._door_items:
                 idx = self._door_items.index(item)
                 self._selected_door_indices.append(idx)
