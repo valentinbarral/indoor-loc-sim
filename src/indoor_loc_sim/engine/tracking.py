@@ -269,7 +269,7 @@ def estimate_ekf_rss(
 
         meas = signal.measurements[i]
         selected = _select_valid_rss_indices(meas.values, min_rss_threshold)
-        if len(selected) == 0:
+        if len(selected) < 3:
             x, A = _jacobian_complex_step(f_state, x)
             P = A @ P @ A.T + Q
             P = 0.5 * (P + P.T)
@@ -487,46 +487,60 @@ def estimate_ekf_rss_accel(
 
         meas = signal.measurements[i]
         selected = _select_valid_rss_indices(meas.values, min_rss_threshold)
-        bp = beacon_positions[selected]
-        if use_walls:
-            w_att = _compute_wall_attenuation(
+        if len(selected) < 3:
+            z = np.array([ax, ay])
+            h_meas = lambda state: state[5:7]
+            x, P = _ekf_update(
+                f_state,
                 x,
-                bp,
-                wall_list,
-                door_list,
-                wall_attenuation_db,
+                P,
+                h_meas,
+                z,
+                Q,
+                accel_R,
+                max_normalized_innovation=18.0,
             )
         else:
-            w_att = None
+            bp = beacon_positions[selected]
+            if use_walls:
+                w_att = _compute_wall_attenuation(
+                    x,
+                    bp,
+                    wall_list,
+                    door_list,
+                    wall_attenuation_db,
+                )
+            else:
+                w_att = None
 
-        z = np.concatenate((meas.values[selected], np.array([ax, ay])))
-        rss_R = measurement_noise_std**2 * np.eye(len(selected))
-        R = np.block(
-            [
-                [rss_R, np.zeros((len(selected), 2))],
-                [np.zeros((2, len(selected))), accel_R],
-            ]
-        )
-        h_meas = (
-            lambda state, bp=bp, a=rssi_at_ref, n=path_loss_exponent, _d0=d0, wa=w_att: (
-                np.concatenate(
-                    (
-                        _u2rss(state, bp, a, n, _d0, wa),
-                        state[5:7],
+            z = np.concatenate((meas.values[selected], np.array([ax, ay])))
+            rss_R = measurement_noise_std**2 * np.eye(len(selected))
+            R = np.block(
+                [
+                    [rss_R, np.zeros((len(selected), 2))],
+                    [np.zeros((2, len(selected))), accel_R],
+                ]
+            )
+            h_meas = (
+                lambda state, bp=bp, a=rssi_at_ref, n=path_loss_exponent, _d0=d0, wa=w_att: (
+                    np.concatenate(
+                        (
+                            _u2rss(state, bp, a, n, _d0, wa),
+                            state[5:7],
+                        )
                     )
                 )
             )
-        )
-        x, P = _ekf_update(
-            f_state,
-            x,
-            P,
-            h_meas,
-            z,
-            Q,
-            R,
-            max_normalized_innovation=9.0 * len(z),
-        )
+            x, P = _ekf_update(
+                f_state,
+                x,
+                P,
+                h_meas,
+                z,
+                Q,
+                R,
+                max_normalized_innovation=9.0 * len(z),
+            )
         result.append(
             TrajectoryPoint(
                 x=float(x[0]),
@@ -695,7 +709,7 @@ def estimate_ukf_rss(
 
         meas = signal.measurements[i]
         selected = _select_valid_rss_indices(meas.values, min_rss_threshold)
-        if len(selected) == 0:
+        if len(selected) < 3:
             x = f_state(x)
             P = P + Q
         else:
