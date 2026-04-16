@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import Qt, QThread, Signal as QSignal
+import numpy as np
+
+from PySide6.QtCore import Qt, QThread, QTimer, Signal as QSignal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -18,6 +20,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QScrollArea,
     QDialog,
+    QApplication,
 )
 from PySide6.QtGui import QColor
 
@@ -135,6 +138,19 @@ class EstimationWorker(QThread):
             self.error.emit(f"{self._algo_name}: {e}")
 
     def _run_fingerprint(self) -> None:
+        xs = np.arange(
+            self._fp_x_range[0],
+            self._fp_x_range[1] + self._fp_grid_spacing / 2,
+            self._fp_grid_spacing,
+        )
+        ys = np.arange(
+            self._fp_y_range[0],
+            self._fp_y_range[1] + self._fp_grid_spacing / 2,
+            self._fp_grid_spacing,
+        )
+        grid_points = len(xs) * len(ys)
+        total_samples = len(self._signal.timeline)
+
         radio_map = build_radio_map(
             beacons=self._fp_beacons,
             x_range=self._fp_x_range,
@@ -150,7 +166,7 @@ class EstimationWorker(QThread):
             rssi_at_ref=self._rssi_at_ref,
             d0=self._d0,
             progress_callback=lambda cur, tot: self._emit_progress(
-                "Building radio map", cur, tot
+                f"Building radio map ({grid_points} grid points)", cur, tot
             ),
             is_cancelled=self._is_cancelled,
         )
@@ -163,7 +179,7 @@ class EstimationWorker(QThread):
             auto_k=self._auto_k,
             metric=self._metric,
             progress_callback=lambda cur, tot: self._emit_progress(
-                "Estimating positions", cur, tot
+                f"Estimating positions ({total_samples} samples)", cur, tot
             ),
             is_cancelled=self._is_cancelled,
         )
@@ -774,7 +790,9 @@ class EstimationTab(QWidget):
         self._btn_estimate.setEnabled(False)
 
         dialog = SimulationProgressDialog(worker, parent=self)
-        worker.start()
+        dialog.show()
+        QApplication.processEvents()
+        QTimer.singleShot(0, worker.start)
         dialog.exec()
 
         self._btn_estimate.setEnabled(True)

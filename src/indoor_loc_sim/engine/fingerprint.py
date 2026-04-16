@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -92,6 +93,7 @@ def build_radio_map(
 
     entries = []
     count = 0
+    last_reported = 0
     for x in xs:
         for y in ys:
             if is_cancelled and is_cancelled():
@@ -123,8 +125,13 @@ def build_radio_map(
                 )
             )
             count += 1
-            if progress_callback:
+            report_interval = 1 if count <= 10 else _PROGRESS_YIELD_INTERVAL
+            if progress_callback and (
+                count - last_reported >= report_interval or count == total_points
+            ):
                 progress_callback(count, total_points)
+                last_reported = count
+                time.sleep(0)
 
     return RadioMap(entries=entries, beacons=beacons, grid_spacing=grid_spacing)
 
@@ -137,6 +144,7 @@ FINGERPRINT_METRICS: dict[str, str] = {
 }
 
 _REF_GRID_SPACING: float = 2.0
+_PROGRESS_YIELD_INTERVAL: int = 10
 
 
 def compute_adaptive_k(k: int, grid_spacing: float) -> int:
@@ -200,6 +208,7 @@ def estimate_fingerprint_knn(
     trajectory: list[TrajectoryPoint] = []
     all_neighbor_indices: list[np.ndarray] = []
     all_neighbor_distances: list[np.ndarray] = []
+    last_reported = 0
 
     for i in range(total_steps):
         if is_cancelled and is_cancelled():
@@ -230,8 +239,14 @@ def estimate_fingerprint_knn(
         all_neighbor_indices.append(nearest_indices)
         all_neighbor_distances.append(nearest_distances)
 
-        if progress_callback:
-            progress_callback(i + 1, total_steps)
+        step = i + 1
+        report_interval = 1 if step <= 10 else _PROGRESS_YIELD_INTERVAL
+        if progress_callback and (
+            step - last_reported >= report_interval or step == total_steps
+        ):
+            progress_callback(step, total_steps)
+            last_reported = step
+            time.sleep(0)
 
     return FingerprintResult(
         trajectory=trajectory,
