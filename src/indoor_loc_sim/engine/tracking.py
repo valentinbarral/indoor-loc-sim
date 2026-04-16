@@ -153,6 +153,20 @@ def _simulate_acceleration_measurements(
     return accel
 
 
+def _select_strongest_valid_rss_indices(
+    rss_values: np.ndarray,
+    max_beacons: int | None,
+) -> np.ndarray:
+    valid_indices = np.where(np.isfinite(rss_values))[0]
+    if len(valid_indices) == 0:
+        return valid_indices
+
+    strongest = valid_indices[np.argsort(rss_values[valid_indices])[::-1]]
+    if max_beacons is None or max_beacons <= 0:
+        return strongest
+    return strongest[: min(max_beacons, len(strongest))]
+
+
 # ── Extended Kalman Filter (matches pos2D_EKF_RSS.m) ──
 
 
@@ -206,17 +220,16 @@ def estimate_ekf_rss(
     is_cancelled: Callable[[], bool] | None = None,
     rssi_at_ref: float = -59.0,
     d0: float = 1.0,
+    max_beacons: int | None = None,
 ) -> list[TrajectoryPoint]:
     n_states = 5
 
     beacon_positions = np.array([b.r for b in signal.beacons])
-    n_beacons = len(signal.beacons)
 
     wall_list = walls or []
     door_list = doors or []
     use_walls = wall_attenuation_db > 0 and bool(wall_list)
 
-    R = measurement_noise_std**2 * np.eye(n_beacons)
     # Large initial covariance so the filter trusts early measurements
     P = np.diag([10.0, 10.0, 1.0, 2.0, 2.0])
 
@@ -253,22 +266,31 @@ def estimate_ekf_rss(
             )
 
         meas = signal.measurements[i]
-        if use_walls:
-            w_att = _compute_wall_attenuation(
-                x,
-                beacon_positions,
-                wall_list,
-                door_list,
-                wall_attenuation_db,
-            )
+        selected = _select_strongest_valid_rss_indices(meas.values, max_beacons)
+        if len(selected) == 0:
+            x, A = _jacobian_complex_step(f_state, x)
+            P = A @ P @ A.T + Q
+            P = 0.5 * (P + P.T)
         else:
-            w_att = None
-        h_meas = (
-            lambda state, bp=beacon_positions, a=rssi_at_ref, n=path_loss_exponent, _d0=d0, wa=w_att: (
-                _u2rss(state, bp, a, n, _d0, wa)
+            bp = beacon_positions[selected]
+            z = meas.values[selected]
+            if use_walls:
+                w_att = _compute_wall_attenuation(
+                    x,
+                    bp,
+                    wall_list,
+                    door_list,
+                    wall_attenuation_db,
+                )
+            else:
+                w_att = None
+            h_meas = (
+                lambda state, _bp=bp, a=rssi_at_ref, n=path_loss_exponent, _d0=d0, wa=w_att: (
+                    _u2rss(state, _bp, a, n, _d0, wa)
+                )
             )
-        )
-        x, P = _ekf_update(f_state, x, P, h_meas, meas.values, Q, R)
+            R = measurement_noise_std**2 * np.eye(len(selected))
+            x, P = _ekf_update(f_state, x, P, h_meas, z, Q, R)
         result.append(
             TrajectoryPoint(
                 x=float(x[0].real),
@@ -375,17 +397,16 @@ def estimate_ekf_rss_accel(
     is_cancelled: Callable[[], bool] | None = None,
     rssi_at_ref: float = -59.0,
     d0: float = 1.0,
+    max_beacons: int | None = None,
 ) -> list[TrajectoryPoint]:
     n_states = 7
 
     beacon_positions = np.array([b.r for b in signal.beacons])
-    n_beacons = len(signal.beacons)
 
     wall_list = walls or []
     door_list = doors or []
     use_walls = wall_attenuation_db > 0 and bool(wall_list)
 
-    rss_R = measurement_noise_std**2 * np.eye(n_beacons)
     accel_R = accel_noise_variance * np.eye(2)
     P = np.diag([10.0, 10.0, 1.0, 2.0, 2.0, 1.0, 1.0])
 
@@ -454,10 +475,12 @@ def estimate_ekf_rss_accel(
             )
 
         meas = signal.measurements[i]
+        selected = _select_strongest_valid_rss_indices(meas.values, max_beacons)
+        bp = beacon_positions[selected]
         if use_walls:
             w_att = _compute_wall_attenuation(
                 x,
-                beacon_positions,
+                bp,
                 wall_list,
                 door_list,
                 wall_attenuation_db,
@@ -465,15 +488,16 @@ def estimate_ekf_rss_accel(
         else:
             w_att = None
 
-        z = np.concatenate((meas.values, np.array([ax, ay])))
+        z = np.concatenate((meas.values[selected], np.array([ax, ay])))
+        rss_R = measurement_noise_std**2 * np.eye(len(selected))
         R = np.block(
             [
-                [rss_R, np.zeros((n_beacons, 2))],
-                [np.zeros((2, n_beacons)), accel_R],
+                [rss_R, np.zeros((len(selected), 2))],
+                [np.zeros((2, len(selected))), accel_R],
             ]
         )
         h_meas = (
-            lambda state, bp=beacon_positions, a=rssi_at_ref, n=path_loss_exponent, _d0=d0, wa=w_att: (
+            lambda state, bp=bp, a=rssi_at_ref, n=path_loss_exponent, _d0=d0, wa=w_att: (
                 np.concatenate(
                     (
                         _u2rss(state, bp, a, n, _d0, wa),
@@ -595,17 +619,16 @@ def estimate_ukf_rss(
     is_cancelled: Callable[[], bool] | None = None,
     rssi_at_ref: float = -59.0,
     d0: float = 1.0,
+    max_beacons: int | None = None,
 ) -> list[TrajectoryPoint]:
     n_states = 5
 
     beacon_positions = np.array([b.r for b in signal.beacons])
-    n_beacons = len(signal.beacons)
 
     wall_list = walls or []
     door_list = doors or []
     use_walls = wall_attenuation_db > 0 and bool(wall_list)
 
-    R = measurement_noise_std**2 * np.eye(n_beacons)
     P = np.diag([10.0, 10.0, 1.0, 2.0, 2.0])
 
     x = np.array(
@@ -641,22 +664,30 @@ def estimate_ukf_rss(
             )
 
         meas = signal.measurements[i]
-        if use_walls:
-            w_att = _compute_wall_attenuation(
-                x,
-                beacon_positions,
-                wall_list,
-                door_list,
-                wall_attenuation_db,
-            )
+        selected = _select_strongest_valid_rss_indices(meas.values, max_beacons)
+        if len(selected) == 0:
+            x = f_state(x)
+            P = P + Q
         else:
-            w_att = None
-        h_meas = (
-            lambda state, bp=beacon_positions, a=rssi_at_ref, n=path_loss_exponent, _d0=d0, wa=w_att: (
-                _u2rss(state, bp, a, n, _d0, wa)
+            bp = beacon_positions[selected]
+            z = meas.values[selected]
+            if use_walls:
+                w_att = _compute_wall_attenuation(
+                    x,
+                    bp,
+                    wall_list,
+                    door_list,
+                    wall_attenuation_db,
+                )
+            else:
+                w_att = None
+            h_meas = (
+                lambda state, _bp=bp, a=rssi_at_ref, n=path_loss_exponent, _d0=d0, wa=w_att: (
+                    _u2rss(state, _bp, a, n, _d0, wa)
+                )
             )
-        )
-        x, P = _ukf_update(f_state, x, P, h_meas, meas.values, Q, R)
+            R = measurement_noise_std**2 * np.eye(len(selected))
+            x, P = _ukf_update(f_state, x, P, h_meas, z, Q, R)
         result.append(
             TrajectoryPoint(
                 x=float(x[0]),
@@ -774,6 +805,7 @@ def estimate_trilateration_rss(
     is_cancelled: Callable[[], bool] | None = None,
     rssi_at_ref: float = -59.0,
     d0: float = 1.0,
+    max_beacons: int = 3,
 ) -> list[TrajectoryPoint]:
     all_beacon_positions = np.array([b.r for b in signal.beacons]).T
 
@@ -810,8 +842,11 @@ def estimate_trilateration_rss(
         valid_mask = np.isfinite(distances) & (distances > 0) & np.isfinite(rss_values)
         valid_indices = np.where(valid_mask)[0]
 
-        if len(valid_indices) >= 3:
-            selected = valid_indices[np.argsort(rss_values[valid_indices])[::-1][:3]]
+        selected = _select_strongest_valid_rss_indices(
+            rss_values[valid_indices], max_beacons
+        )
+        if len(selected) >= 3:
+            selected = valid_indices[selected]
 
             try:
                 x = _trilaterate(

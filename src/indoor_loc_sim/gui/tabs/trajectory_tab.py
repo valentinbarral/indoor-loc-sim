@@ -47,7 +47,7 @@ class TrajectoryTab(QWidget):
         speed_layout.addWidget(QLabel("Walking speed (m/s):"))
         self._spin_speed = QDoubleSpinBox()
         self._spin_speed.setRange(0.1, 10.0)
-        self._spin_speed.setValue(1.2)
+        self._spin_speed.setValue(1.0)
         self._spin_speed.setSingleStep(0.1)
         speed_layout.addWidget(self._spin_speed)
         params_layout.addLayout(speed_layout)
@@ -56,7 +56,7 @@ class TrajectoryTab(QWidget):
         freq_layout.addWidget(QLabel("Sampling frequency (Hz):"))
         self._spin_freq = QDoubleSpinBox()
         self._spin_freq.setRange(0.5, 100.0)
-        self._spin_freq.setValue(5.0)
+        self._spin_freq.setValue(1.0)
         freq_layout.addWidget(self._spin_freq)
         params_layout.addLayout(freq_layout)
 

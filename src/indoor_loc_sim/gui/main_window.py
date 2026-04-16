@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QStatusBar,
 )
 
-from indoor_loc_sim.core.models import Building
+from indoor_loc_sim.core.models import Building, Level
 from indoor_loc_sim.core.project_io import (
     PROJECT_EXTENSION,
     cleanup_temp_dir,
@@ -212,6 +212,30 @@ class MainWindow(QMainWindow):
         self._set_current_project_path(path)
         self._set_building_dirty(False)
 
+    def _refresh_ui_after_new_project(self) -> None:
+        self._planimetry_tab._refresh_all()
+
+        self._trajectory_tab._refresh_waypoint_list()
+        self._trajectory_tab._lbl_info.setText("No trajectory generated")
+        self._trajectory_tab._refresh_canvas()
+        self._planimetry_tab.canvas.clear_all_trajectories()
+        self._planimetry_tab.canvas.remove_heatmap_overlay()
+
+        self._signal_tab._update_beacon_checkboxes()
+        self._signal_tab._update_heatmap_beacon_combo()
+        self._signal_tab._refresh_heatmap_canvas()
+        self._signal_tab._heatmap_canvas.remove_heatmap_overlay()
+        self._signal_tab._right_stack.setCurrentIndex(0)
+        self._signal_tab._lbl_info.setText("No signals generated")
+
+        self._estimation_tab._canvas.clear_fingerprint_overlay()
+        self._estimation_tab._rebuild_history_list()
+        self._estimation_tab._rebuild_fp_combo()
+        self._estimation_tab._lbl_results.setText("No estimations run")
+        self._estimation_tab._refresh_canvas()
+
+        self._analysis_tab._on_analysis_changed()
+
     def _on_new_project(self) -> None:
         reply = QMessageBox.question(
             self,
@@ -222,7 +246,7 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             self._suspend_dirty_tracking = True
             self._cleanup_temp()
-            self._state.set_building(Building())
+            self._state.set_building(Building(levels=[Level(n=0)]))
             self._state.clear_trajectory()
             self._state.set_beacon_signals([])
             self._state.clear_estimations()
@@ -230,6 +254,7 @@ class MainWindow(QMainWindow):
             self._set_current_project_path(None)
             self._set_building_dirty(False)
             self._suspend_dirty_tracking = False
+            self._refresh_ui_after_new_project()
 
     def _on_open_building(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

@@ -64,6 +64,7 @@ class EstimationWorker(QThread):
         process_noise: float = 1.0,
         measurement_noise: float = 2.0,
         accel_noise_variance: float = 1e-3,
+        strongest_rss_beacons: int = 3,
         path_loss_exponent: float = 2.0,
         walls: list[Wall] | None = None,
         doors: list[Door] | None = None,
@@ -91,6 +92,7 @@ class EstimationWorker(QThread):
         self._process_noise = process_noise
         self._measurement_noise = measurement_noise
         self._accel_noise_variance = accel_noise_variance
+        self._strongest_rss_beacons = strongest_rss_beacons
         self._path_loss_exponent = path_loss_exponent
         self._walls = walls or []
         self._doors = doors or []
@@ -181,6 +183,7 @@ class EstimationWorker(QThread):
                 initial_state=self._initial_state,
                 process_noise_std=self._process_noise,
                 measurement_noise_std=self._measurement_noise,
+                max_beacons=self._strongest_rss_beacons,
                 path_loss_exponent=self._path_loss_exponent,
                 walls=self._walls,
                 doors=self._doors,
@@ -208,6 +211,7 @@ class EstimationWorker(QThread):
                 measurement_noise_std=self._measurement_noise,
                 path_loss_exponent=self._path_loss_exponent,
                 accel_noise_variance=self._accel_noise_variance,
+                max_beacons=self._strongest_rss_beacons,
                 walls=self._walls,
                 doors=self._doors,
                 wall_attenuation_db=self._wall_attenuation_db,
@@ -221,6 +225,7 @@ class EstimationWorker(QThread):
                 signal=self._signal,
                 initial_state=self._initial_state,
                 path_loss_exponent=self._path_loss_exponent,
+                max_beacons=self._strongest_rss_beacons,
                 walls=self._walls,
                 doors=self._doors,
                 wall_attenuation_db=self._wall_attenuation_db,
@@ -428,6 +433,15 @@ class EstimationTab(QWidget):
         an_layout.addWidget(self._spin_accel_noise_var)
         params_layout.addLayout(an_layout)
 
+        sb_layout = QHBoxLayout()
+        self._lbl_strongest_beacons = QLabel("Strongest RSS beacons:")
+        sb_layout.addWidget(self._lbl_strongest_beacons)
+        self._spin_strongest_beacons = QSpinBox()
+        self._spin_strongest_beacons.setRange(1, 999)
+        self._spin_strongest_beacons.setValue(3)
+        sb_layout.addWidget(self._spin_strongest_beacons)
+        params_layout.addLayout(sb_layout)
+
         left_layout.addWidget(self._params_group)
 
         self._fp_group = QGroupBox("Fingerprint Parameters")
@@ -547,10 +561,12 @@ class EstimationTab(QWidget):
             self._on_fp_run_selection_changed
         )
         self._state.building_changed.connect(self._mark_canvas_dirty)
+        self._state.building_changed.connect(self._update_strongest_beacons_limit)
         self._state.trajectory_changed.connect(self._refresh_canvas)
         self._state.signals_changed.connect(self._sync_params_from_signal_tab)
         self._state.estimation_changed.connect(self._rebuild_history_list)
         self._state.estimation_changed.connect(self._rebuild_fp_combo)
+        self._update_strongest_beacons_limit()
         self._on_algo_changed(self._combo_algo.currentText())
 
     def _mark_canvas_dirty(self) -> None:
@@ -587,6 +603,15 @@ class EstimationTab(QWidget):
         self._lbl_accel_noise.setEnabled(accel_enabled)
         self._spin_accel_noise_var.setEnabled(accel_enabled)
 
+        strongest_enabled = text in (
+            "pos2D_EKF_RSS",
+            "pos2D_EKF_RSS_Accel",
+            "pos2D_UKF_RSS",
+            "pos2D_Tri_RSS",
+        )
+        self._lbl_strongest_beacons.setEnabled(strongest_enabled)
+        self._spin_strongest_beacons.setEnabled(strongest_enabled)
+
         process_enabled = text in (
             "pos2D_EKF_RSS",
             "pos2D_EKF_ToF",
@@ -621,6 +646,13 @@ class EstimationTab(QWidget):
         else:
             self._spin_meas_noise.setValue(params.get("rss_sigma", 2.0))
 
+    def _update_strongest_beacons_limit(self) -> None:
+        n_beacons = len(self._state.building.all_beacons())
+        max_beacons = max(1, n_beacons)
+        current = self._spin_strongest_beacons.value()
+        self._spin_strongest_beacons.setRange(1, max_beacons)
+        self._spin_strongest_beacons.setValue(min(current, max_beacons))
+
     def _collect_run_params(self, algo_name: str) -> dict[str, float | int | str]:
         sig_p = self._state.signal_tab_params
         path_loss_exponent = sig_p.get("path_loss_exponent", 2.0)
@@ -629,6 +661,7 @@ class EstimationTab(QWidget):
         if algo_name in ("pos2D_EKF_RSS", "pos2D_UKF_RSS"):
             params["σ_p"] = self._spin_process_noise.value()
             params["σ_m"] = self._spin_meas_noise.value()
+            params["beacons"] = self._spin_strongest_beacons.value()
             params["n"] = path_loss_exponent
             params["A"] = sig_p.get("rssi_at_ref", -59.0)
             params["d₀"] = sig_p.get("d0", 1.0)
@@ -641,6 +674,7 @@ class EstimationTab(QWidget):
             params["σ_p"] = self._spin_process_noise.value()
             params["σ_m"] = self._spin_meas_noise.value()
             params["σ²_acc"] = self._spin_accel_noise_var.value()
+            params["beacons"] = self._spin_strongest_beacons.value()
             params["n"] = path_loss_exponent
             params["A"] = sig_p.get("rssi_at_ref", -59.0)
             params["d₀"] = sig_p.get("d0", 1.0)
@@ -648,7 +682,7 @@ class EstimationTab(QWidget):
         elif algo_name == "pos2D_Tri_ToF":
             params["type"] = "ToF"
         elif algo_name == "pos2D_Tri_RSS":
-            params["beacons"] = 3
+            params["beacons"] = self._spin_strongest_beacons.value()
             params["n"] = path_loss_exponent
             params["A"] = sig_p.get("rssi_at_ref", -59.0)
             params["d₀"] = sig_p.get("d0", 1.0)
@@ -726,6 +760,7 @@ class EstimationTab(QWidget):
             process_noise=self._spin_process_noise.value(),
             measurement_noise=self._spin_meas_noise.value(),
             accel_noise_variance=self._spin_accel_noise_var.value(),
+            strongest_rss_beacons=self._spin_strongest_beacons.value(),
             path_loss_exponent=path_loss_exponent,
             walls=level.walls if level else [],
             doors=level.doors if level else [],
