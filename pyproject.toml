@@ -1,0 +1,22 @@
+[project]
+name = "indoor-loc-sim"
+version = "0.1.0"
+description = "Indoor localization simulator - Python replacement for navindoor"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.7.0",
+    "matplotlib>=3.9.0",
+    "numpy>=1.26.0",
+    "scipy>=1.12.0",
+]
+
+[project.scripts]
+indoor-loc-sim = "indoor_loc_sim.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/indoor_loc_sim"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
