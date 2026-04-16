@@ -1,7 +1,7 @@
 [project]
 name = "indoor-loc-sim"
 version = "0.1.0"
-description = "Indoor localization simulator - Python replacement for navindoor"
+description = "Indoor localization simulator"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -12,7 +12,7 @@ Tutorials:
 ## Requirements
 
 - Python **>= 3.11**
-- [uv](https://docs.astral.sh/uv/)
+- [uv](https://docs.astral.sh/uv/) **>= 0.11.7**
 
 ## Installation
 
