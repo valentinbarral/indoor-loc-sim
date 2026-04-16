@@ -576,6 +576,9 @@ class EstimationTab(QWidget):
         if self._canvas_dirty:
             self._refresh_canvas()
 
+    def sync_floor_plan_visibility(self, visible: bool) -> None:
+        self._canvas.set_floor_plan_visible(visible)
+
     def _on_algo_changed(self, text: str) -> None:
         info_map = {
             "pos2D_EKF_RSS": "Extended Kalman Filter with RSS signals",
@@ -961,6 +964,9 @@ class EstimationTab(QWidget):
             level = self._state.building.levels[level_idx]
             if level.floor_plan_path:
                 self._canvas.load_floor_plan(level.floor_plan_path, level.dimensions)
+                self._canvas.set_floor_plan_visible(
+                    self._planimetry_canvas.floor_plan_visible
+                )
             else:
                 self._canvas.set_dimensions(level.dimensions)
             for w in level.walls:

@@ -5,7 +5,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QListWidget,
+    QAbstractItemView,
     QLineEdit,
     QSplitter,
     QToolBar,
@@ -172,6 +173,8 @@ def _icon_snap(p: QPainter, s: int) -> None:
 
 
 class PlanimetryTab(QWidget):
+    floor_plan_visibility_changed = Signal(bool)
+
     def __init__(self, state: AppState, parent=None):
         super().__init__(parent)
         self._state = state
@@ -273,6 +276,13 @@ class PlanimetryTab(QWidget):
 
         self._beacon_list = QListWidget()
         self._beacon_list.setMaximumHeight(150)
+        self._beacon_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self._beacon_list.setStyleSheet(
+            "QListWidget::item:selected { background: #f39c12; color: black; }"
+            "QListWidget::item:selected:!active { background: #f39c12; color: black; }"
+        )
         beacons_layout.addWidget(self._beacon_list)
 
         beacon_label_layout = QHBoxLayout()
@@ -422,6 +432,7 @@ class PlanimetryTab(QWidget):
         self._btn_add_level.clicked.connect(self._on_add_level)
         self._btn_remove_level.clicked.connect(self._on_remove_level)
         self._level_list.currentRowChanged.connect(self._on_level_selected)
+        self._beacon_list.currentRowChanged.connect(self._on_beacon_list_selected)
 
         self._btn_load_plan.clicked.connect(self._on_load_plan)
         self._chk_show_plan.toggled.connect(self._on_show_plan_toggled)
@@ -453,6 +464,8 @@ class PlanimetryTab(QWidget):
         self._canvas.beacon_placed.connect(self._on_beacon_placed)
         self._canvas.beacon_moved.connect(self._on_beacon_moved)
         self._canvas.beacon_move_finished.connect(self._on_beacon_move_finished)
+        self._canvas.beacon_selected.connect(self._on_beacon_selected)
+        self._canvas.selection_cleared.connect(self._clear_beacon_list_selection)
         self._canvas.wall_drawn.connect(self._on_wall_drawn)
         self._canvas.door_drawn.connect(self._on_door_drawn)
         self._canvas.room_drawn.connect(self._on_room_drawn)
@@ -473,6 +486,7 @@ class PlanimetryTab(QWidget):
     def _on_show_plan_toggled(self, checked: bool) -> None:
         self._show_floor_plan = checked
         self._canvas.set_floor_plan_visible(checked)
+        self.floor_plan_visibility_changed.emit(checked)
 
     # ── Wall color ──
 
@@ -750,6 +764,45 @@ class PlanimetryTab(QWidget):
             self._skip_refresh = True
             self._state.building_changed.emit()
             self._skip_refresh = False
+
+    def _on_beacon_selected(self, index: int) -> None:
+        if 0 <= index < self._beacon_list.count():
+            item = self._beacon_list.item(index)
+            if item is not None:
+                self._beacon_list.blockSignals(True)
+                self._beacon_list.clearSelection()
+                self._beacon_list.setCurrentRow(index)
+                self._beacon_list.setCurrentItem(item)
+                item.setSelected(True)
+                self._beacon_list.blockSignals(False)
+                for i in range(self._beacon_list.count()):
+                    other = self._beacon_list.item(i)
+                    if other is None:
+                        continue
+                    if i == index:
+                        other.setBackground(QColor("#f39c12"))
+                        other.setForeground(QColor("#000000"))
+                    else:
+                        other.setBackground(QBrush())
+                        other.setForeground(QBrush())
+                self._beacon_list.scrollToItem(item)
+
+    def _clear_beacon_list_selection(self) -> None:
+        self._beacon_list.blockSignals(True)
+        self._beacon_list.clearSelection()
+        self._beacon_list.setCurrentRow(-1)
+        self._beacon_list.blockSignals(False)
+        for i in range(self._beacon_list.count()):
+            item = self._beacon_list.item(i)
+            if item is not None:
+                item.setBackground(QBrush())
+                item.setForeground(QBrush())
+
+    def _on_beacon_list_selected(self, row: int) -> None:
+        if row >= 0:
+            self._canvas.select_beacon_by_index(row)
+        else:
+            self._clear_beacon_list_selection()
 
     def _on_wall_drawn(self, x1: float, y1: float, x2: float, y2: float) -> None:
         level = self._current_level()

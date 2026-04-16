@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QStatusBar,
+    QLabel,
 )
 
 from indoor_loc_sim.core.models import Building, Level
@@ -66,6 +67,12 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._analysis_tab, "5. Error Analysis")
 
         self._tabs.currentChanged.connect(self._on_tab_changed)
+        self._planimetry_tab.floor_plan_visibility_changed.connect(
+            self._trajectory_tab.sync_floor_plan_visibility
+        )
+        self._planimetry_tab.floor_plan_visibility_changed.connect(
+            self._estimation_tab.sync_floor_plan_visibility
+        )
         self.setCentralWidget(self._tabs)
 
     def _setup_menu(self) -> None:
@@ -126,6 +133,8 @@ class MainWindow(QMainWindow):
     def _setup_status_bar(self) -> None:
         status = QStatusBar()
         self.setStatusBar(status)
+        self._lbl_cursor_coords = QLabel("")
+        status.addPermanentWidget(self._lbl_cursor_coords)
         self._state.building_changed.connect(
             lambda: status.showMessage("Building updated", 3000)
         )
@@ -142,6 +151,12 @@ class MainWindow(QMainWindow):
         self._state.analysis_changed.connect(
             lambda: status.showMessage("Analysis updated", 3000)
         )
+        self._planimetry_tab.canvas.cursor_position_changed.connect(
+            self._on_planimetry_cursor_position_changed
+        )
+        self._planimetry_tab.canvas.cursor_left_canvas.connect(
+            self._clear_cursor_coordinates
+        )
 
     def _on_tab_changed(self, index: int) -> None:
         planimetry_canvas = self._planimetry_tab.canvas
@@ -154,6 +169,16 @@ class MainWindow(QMainWindow):
             self._signal_tab.ensure_building_ui_up_to_date()
         elif index == 3:
             self._estimation_tab.ensure_canvas_up_to_date()
+
+        if index != 0:
+            self._clear_cursor_coordinates()
+
+    def _on_planimetry_cursor_position_changed(self, x: float, y: float) -> None:
+        if self._tabs.currentIndex() == 0:
+            self._lbl_cursor_coords.setText(f"x: {x:.2f} m, y: {y:.2f} m")
+
+    def _clear_cursor_coordinates(self) -> None:
+        self._lbl_cursor_coords.setText("")
 
     # ── File operations ──
 

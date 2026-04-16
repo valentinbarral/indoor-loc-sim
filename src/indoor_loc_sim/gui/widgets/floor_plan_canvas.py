@@ -54,6 +54,7 @@ PIXELS_PER_METER = 10.0
 BEACON_RADIUS = 6
 BEACON_COLOR = QColor("#e74c3c")
 BEACON_SELECTED_COLOR = QColor("#f39c12")
+BEACON_SELECTED_PEN_COLOR = QColor("#fff200")
 WALL_COLOR = QColor("#2c3e50")
 DOOR_COLOR = QColor("#27ae60")
 TRAJECTORY_REAL_COLOR = QColor("#3498db")
@@ -178,6 +179,7 @@ class BeaconGraphicsItem(QGraphicsEllipseItem):
         self.beacon = beacon
         self.beacon_index = index
         self._canvas = canvas
+        self._press_scene_pos: QPointF | None = None
         self.setPos(beacon.x, beacon.y)
         self.setBrush(QBrush(BEACON_COLOR))
         self.setPen(QPen(Qt.GlobalColor.black, 1))
@@ -194,6 +196,16 @@ class BeaconGraphicsItem(QGraphicsEllipseItem):
         label.setPos(r + 2, -r - 2)
         label.setBrush(QBrush(QColor("#b71c1c")))
 
+    def set_selected_appearance(self, selected: bool) -> None:
+        if selected:
+            self.setBrush(QBrush(BEACON_SELECTED_COLOR))
+            self.setPen(QPen(BEACON_SELECTED_PEN_COLOR, 3))
+            self.setZValue(20)
+        else:
+            self.setBrush(QBrush(BEACON_COLOR))
+            self.setPen(QPen(Qt.GlobalColor.black, 1))
+            self.setZValue(10)
+
     def set_interaction_enabled(self, enabled: bool) -> None:
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, enabled)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, enabled)
@@ -208,11 +220,25 @@ class BeaconGraphicsItem(QGraphicsEllipseItem):
                 self._canvas.beacon_moved.emit(self.beacon_index, mx, my)
         return super().itemChange(change, value)
 
+    def mousePressEvent(self, event) -> None:
+        self._press_scene_pos = self.pos()
+        if self._canvas is not None:
+            self._canvas.clear_selection()
+            self._canvas._selected_beacon_items.append(self)
+            self.set_selected_appearance(True)
+            self._canvas.beacon_selected.emit(self.beacon_index)
+        super().mousePressEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:
         if self._canvas is not None:
             pos = self.pos()
-            mx, my = self._canvas.scene_to_meters(pos)
-            self._canvas.beacon_move_finished.emit(self.beacon_index, mx, my)
+            if (
+                self._press_scene_pos is None
+                or (pos - self._press_scene_pos).manhattanLength() > 0
+            ):
+                mx, my = self._canvas.scene_to_meters(pos)
+                self._canvas.beacon_move_finished.emit(self.beacon_index, mx, my)
+            self._press_scene_pos = None
         super().mouseReleaseEvent(event)
 
 
@@ -221,6 +247,10 @@ class FloorPlanCanvas(QGraphicsView):
     waypoint_placed = Signal(float, float)
     beacon_moved = Signal(int, float, float)
     beacon_move_finished = Signal(int, float, float)
+    beacon_selected = Signal(int)
+    selection_cleared = Signal()
+    cursor_position_changed = Signal(float, float)
+    cursor_left_canvas = Signal()
     wall_drawn = Signal(float, float, float, float)
     door_drawn = Signal(float, float, float, float)
     room_drawn = Signal(float, float, float, float)
@@ -315,12 +345,21 @@ class FloorPlanCanvas(QGraphicsView):
                 self._door_items[idx].setPen(QPen(DOOR_COLOR, 4, Qt.PenStyle.DashLine))
 
         for item in self._selected_beacon_items:
-            item.setBrush(QBrush(BEACON_COLOR))
+            item.set_selected_appearance(False)
 
         self._selected_wall_indices.clear()
         self._selected_door_indices.clear()
         self._selected_beacon_items.clear()
         self._selection_start = None
+
+    def select_beacon_by_index(self, index: int) -> None:
+        self.clear_selection()
+        for item in self._beacon_items:
+            if item.beacon_index == index:
+                self._selected_beacon_items.append(item)
+                item.set_selected_appearance(True)
+                self.beacon_selected.emit(index)
+                break
 
     def _select_item_at(self, scene_pos: QPointF) -> bool:
         for item in self._scene.items(scene_pos):
@@ -377,6 +416,10 @@ class FloorPlanCanvas(QGraphicsView):
     @property
     def wall_color(self) -> QColor:
         return self._wall_color
+
+    @property
+    def floor_plan_visible(self) -> bool:
+        return self._floor_plan_visible
 
     # ── Snap logic ──
 
@@ -925,6 +968,7 @@ class FloorPlanCanvas(QGraphicsView):
             if self._tool_mode == ToolMode.SELECT:
                 if self._select_item_at(scene_pos):
                     return
+                self.selection_cleared.emit()
 
             if self._tool_mode == ToolMode.RECT_SELECT:
                 self.clear_selection()
@@ -1023,6 +1067,8 @@ class FloorPlanCanvas(QGraphicsView):
             return
 
         scene_pos = self.mapToScene(event.pos())
+        mx, my = self.scene_to_meters(scene_pos)
+        self.cursor_position_changed.emit(mx, my)
 
         if (
             self._tool_mode == ToolMode.RECT_SELECT
@@ -1053,7 +1099,24 @@ class FloorPlanCanvas(QGraphicsView):
 
         super().mouseMoveEvent(event)
 
+    def leaveEvent(self, event) -> None:
+        self.cursor_left_canvas.emit()
+        super().leaveEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            selected_items = [
+                item
+                for item in self._scene.selectedItems()
+                if isinstance(item, BeaconGraphicsItem)
+            ]
+            if selected_items:
+                beacon_item = selected_items[0]
+                self.clear_selection()
+                self._selected_beacon_items.append(beacon_item)
+                beacon_item.set_selected_appearance(True)
+                self.beacon_selected.emit(beacon_item.beacon_index)
+
         if event.button() == Qt.MouseButton.MiddleButton and self._middle_pan_active:
             self._middle_pan_active = False
             self._middle_pan_last_pos = None
@@ -1080,7 +1143,8 @@ class FloorPlanCanvas(QGraphicsView):
                     for b_item in self._beacon_items:
                         if rect.contains(b_item.pos()):
                             self._selected_beacon_items.append(b_item)
-                            b_item.setBrush(QBrush(BEACON_SELECTED_COLOR))
+                            b_item.set_selected_appearance(True)
+                            self.beacon_selected.emit(b_item.beacon_index)
 
                     self._scene.removeItem(self._selection_rect)
                     self._selection_rect = None
