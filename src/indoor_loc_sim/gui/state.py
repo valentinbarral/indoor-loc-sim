@@ -133,6 +133,8 @@ class AppState(QObject):
         self.waypoints.clear()
         self.ground_truth = None
         self.trajectory_changed.emit()
+        self.set_beacon_signals([])
+        self.clear_estimations()
 
     def set_beacon_signals(self, signals: list[BeaconSignal]) -> None:
         self.beacon_signals = signals
